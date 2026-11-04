@@ -80,18 +80,28 @@ This file is in `.gitignore`, because it contains your tenant's data.
 
 ## Role permissions from a saved roles list (`onetrust_role_permissions.py`)
 
-A second, **read-only** script (it sends only GET requests) for when the roles API refuses API tokens (HTTP 403). It uses your browser's login token instead.
+A second, **read-only** script. Every data request is a GET. The only other request is the login POST to `/api/access/v1/oauth/token`, which is sent only when you use a Client ID + Secret and just gets a token.
+
+It accepts **one** of these logins. If several are filled in, the first in this list is used:
+- **Browser token:** the value after `Authorization: Bearer ` on any `/api/` request in Burp. This is the one known to work, because the roles API has refused API keys and client credentials with HTTP 403.
+- **API key:** from the API Keys tab.
+- **Client ID + Client Secret:** from the Client Credentials tab.
+- **Cookie:** only if Burp's requests have no `Authorization` header.
 
 1. In OneTrust, open **Settings → Roles**. In Burp (or the browser's dev tools), find the `GET /api/access/v2/roles/list?...` request and save its **response body** as `roles.json` next to the script. If the list has more roles than one page holds, resend the request with a larger `size` (for example `size=500`) first. The script warns you when the file holds only one page.
-2. From any `/api/` request in Burp, copy the value after `Authorization: Bearer `.
-3. Fill in the CONFIGURATION block:
+2. Fill in the CONFIGURATION block. Leave the logins you don't use as their `paste-...` placeholders:
    ```python
    ONETRUST_DOMAIN = "uat-de.onetrust.com"
-   ONETRUST_TOKEN = "eyJ..."     # value after "Authorization: Bearer "
-   ONETRUST_COOKIE = ""          # only if the request has no Authorization header
-   EXTRA_HEADERS = {}            # only if requests fail without other headers Burp shows
+   ONETRUST_TOKEN = "paste-your-token-here"          # browser token: value after "Authorization: Bearer " in Burp
+   ONETRUST_API_KEY = "paste-your-api-key-here"      # API key (Client Credentials > API Keys tab)
+   ONETRUST_CLIENT_ID = "paste-your-client-id-here"  # client ID + secret (Client Credentials tab)
+   ONETRUST_CLIENT_SECRET = "paste-your-client-secret-here"
+   ONETRUST_COOKIE = ""      # only if the request has no Authorization header
+   EXTRA_HEADERS = {}        # only if requests fail without other headers Burp shows
    ```
-4. Run `python onetrust_role_permissions.py` right away, because browser tokens expire.
+3. Run `python onetrust_role_permissions.py`. With a browser token, run it right away, because browser tokens expire.
+
+If the API key or the Client ID + Secret gets HTTP 401 or 403, the script stops after the first request and tells you to use the browser token.
 
 For each role it calls `GET /api/access/v2/roles/{roleId}`, the request the web app sends when you open a role, and saves `role_permissions.json`: each role from `roles.json` plus a `details` field holding the full response.
 
