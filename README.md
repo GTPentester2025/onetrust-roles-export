@@ -18,11 +18,11 @@ In OneTrust, a SCIM group is one role in one organization, named `{Role} - {Orga
 ## What you need from OneTrust
 
 1. **Your tenant domain:** the host in your browser's address bar when logged in, for example `app.onetrust.com`, `app-eu.onetrust.com`, `app-de.onetrust.com` or `app-uk.onetrust.com`. Leave out `https://`.
-2. **A Client ID and Client Secret with the `SCIM` scope:** a OneTrust admin creates these under **Global Settings → Access Management → Client Credentials → Client Credentials tab**, and selects the **SCIM** scope. The secret is shown only once when it's created, so save it then.
+2. **One of these, with the `SCIM` scope.** A OneTrust admin creates both under **Global Settings → Access Management → Client Credentials**. Secrets and keys are shown only once when they're created, so save them then.
+   - **An API key** (API Keys tab). The script sends it as `Authorization: Bearer <key>`.
+   - **A Client ID and Client Secret** (Client Credentials tab). The script exchanges them for an access token (OAuth 2.0 client credentials, via `POST /api/access/v1/oauth/token`) and sends `Authorization: Bearer <token>`.
 
-The script exchanges the Client ID and Secret for an access token (OAuth 2.0 client credentials, via `POST /api/access/v1/oauth/token`) and sends it as `Authorization: Bearer <token>` on every API call.
-
-**API keys:** OneTrust also offers API keys (the **API Keys** tab on the same page), but OneTrust's docs say SCIM endpoints are authorized with an OAuth 2.0 access token, so this script uses the Client ID and Secret and doesn't ask for an API key.
+If both are filled in, the API key is used. OneTrust's docs say SCIM endpoints are authorized with an OAuth 2.0 access token, so if your API key gets HTTP 401 on `/api/scim/v2/Groups`, use the Client ID and Secret instead.
 
 ## Setup
 
@@ -34,11 +34,15 @@ The script exchanges the Client ID and Secret for an access token (OAuth 2.0 cli
 2. Open `onetrust_roles_export.py` and fill in the CONFIGURATION block at the top. All settings live in the script; there's no separate config file.
    ```python
    ONETRUST_DOMAIN = "yourtenant.my.onetrust.com"      # host you log in to, without https://
-   ONETRUST_CLIENT_ID = "paste-your-client-id-here"    # client credential with the SCIM scope
+   # Fill in EITHER the API key OR the client ID + secret (the API key wins if both are set).
+   # Whichever you use needs the SCIM scope.
+   ONETRUST_API_KEY = "paste-your-api-key-here"
+   ONETRUST_CLIENT_ID = "paste-your-client-id-here"
    ONETRUST_CLIENT_SECRET = "paste-your-client-secret-here"
    ```
+   Leave the method you don't use as its `paste-...` placeholder.
 
-   > **Warning:** once your real Client Secret is in the script, don't commit or push it. Anyone who can read the repo or its history could use the secret, and deleting it later doesn't remove it from git history. Keep your filled-in copy local.
+   > **Warning:** once your real API key or Client Secret is in the script, don't commit or push it. Anyone who can read the repo or its history could use it, and deleting it later doesn't remove it from git history. Keep your filled-in copy local.
 
 ## Run
 
@@ -95,8 +99,8 @@ These constants are at the top of the script:
 
 ## Troubleshooting
 
-- **`[CONFIG] Fill in ONETRUST_DOMAIN ...`:** one of the three values in the CONFIGURATION block still has its placeholder. Replace all three and save the file.
+- **`[CONFIG] Fill in ONETRUST_DOMAIN ...`:** the domain, or both the API key and the Client ID/Secret, still have their placeholders. Fill in the domain plus one of the two methods, and save the file.
 - **`[AUTH ERROR] ... HTTP 400` or `401`:** the Client ID or Secret is wrong, or the credential was revoked or expired. The response text from OneTrust is printed after the error. Also check the domain is the one you log in to (for example `app-eu.onetrust.com` for EU tenants).
-- **Role requests return HTTP 401 or 403:** login worked, but the client credential doesn't have the **SCIM** scope. Add it, or create a new client credential with SCIM selected.
+- **Role requests return HTTP 401 or 403:** the API key is wrong, or the API key or client credential doesn't have the **SCIM** scope. Add the scope, or create a new key or credential with SCIM selected. If an API key keeps getting 401, switch to the Client ID and Secret.
 - **`response was not JSON`:** OneTrust answered with a web page instead of API data. Check the domain, and that the request URL in the message is `/api/scim/v2/Groups`. Earlier versions of this script called `/api/v2/useraccesslevels`, which isn't a public API and returns this error.
 - **`python` opens the Microsoft Store (Windows):** Python isn't installed. Install it from python.org with "Add python.exe to PATH" ticked, or use the uv command above.

@@ -15,7 +15,10 @@ import urllib.request
 
 # ============================ CONFIGURATION: fill these in ============================
 ONETRUST_DOMAIN = "yourtenant.my.onetrust.com"      # host you log in to, without https://
-ONETRUST_CLIENT_ID = "paste-your-client-id-here"    # client credential with the SCIM scope
+# Fill in EITHER the API key OR the client ID + secret (the API key wins if both are set).
+# Whichever you use needs the SCIM scope.
+ONETRUST_API_KEY = "paste-your-api-key-here"
+ONETRUST_CLIENT_ID = "paste-your-client-id-here"
 ONETRUST_CLIENT_SECRET = "paste-your-client-secret-here"
 # =======================================================================================
 
@@ -30,11 +33,16 @@ ONETRUST_GROUP_EXT = "urn:ietf:params:scim:schemas:onetrust:Group"
 
 
 DOMAIN = ONETRUST_DOMAIN.replace("https://", "").strip("/")
+API_KEY = ONETRUST_API_KEY
 CLIENT_ID = ONETRUST_CLIENT_ID
 CLIENT_SECRET = ONETRUST_CLIENT_SECRET
 TOKEN_URL = f"https://{DOMAIN}/api/access/v1/oauth/token"
 GROUPS_URL = f"https://{DOMAIN}/api/scim/v2/Groups"
 HEADERS = {"Accept": "application/json"}  # Authorization is added once the token is fetched
+
+
+def is_filled(value):
+    return bool(value) and not value.startswith("paste-")
 
 
 def get_token():
@@ -129,22 +137,28 @@ def build_roles(groups):
 
 
 def main():
-    if "yourtenant" in DOMAIN or CLIENT_ID.startswith("paste-") or CLIENT_SECRET.startswith("paste-"):
-        sys.exit("[CONFIG] Fill in ONETRUST_DOMAIN, ONETRUST_CLIENT_ID and ONETRUST_CLIENT_SECRET "
-                 "in the CONFIGURATION block at the top of the script.")
+    use_api_key = is_filled(API_KEY)
+    if "yourtenant" in DOMAIN or not (use_api_key or (is_filled(CLIENT_ID) and is_filled(CLIENT_SECRET))):
+        sys.exit("[CONFIG] Fill in ONETRUST_DOMAIN and either ONETRUST_API_KEY or ONETRUST_CLIENT_ID + "
+                 "ONETRUST_CLIENT_SECRET in the CONFIGURATION block at the top of the script.")
 
-    print("Requesting access token ...")
-    token = get_token()
-    if not token:
-        sys.exit("Could not get an access token. Check the domain, client ID and client secret.")
+    if use_api_key:
+        print("Using API key ...")
+        token = API_KEY  # a OneTrust API key is itself the bearer token
+    else:
+        print("Requesting access token ...")
+        token = get_token()
+        if not token:
+            sys.exit("Could not get an access token. Check the domain, client ID and client secret.")
     # shortcut: token is fetched once; if exports ever outlast its lifetime, refresh on 401
     HEADERS["Authorization"] = f"Bearer {token}"
 
     print(f"Fetching roles from {GROUPS_URL} ...")
     groups = fetch_groups()
     if groups is None:
-        sys.exit("Could not list roles. If the error above is HTTP 401 or 403, the client credential needs the "
-                 "SCIM scope (Global Settings > Access Management > Client Credentials).")
+        sys.exit(f"Could not list roles. If the error above is HTTP 401 or 403, check the "
+                 f"{'API key' if use_api_key else 'client ID and secret'} and that it has the SCIM scope "
+                 f"(Global Settings > Access Management > Client Credentials).")
     if not groups:
         sys.exit("No roles returned.")
 
