@@ -1,7 +1,10 @@
-"""Export all OneTrust roles, with the organizations each one is assigned in, to JSON.
+"""Export all OneTrust roles, with each role's full details (including permissions), to JSON.
 
-Roles come from the documented SCIM Groups API, where each group is one "{Role} - {Organization}" pair.
-OneTrust has no public API that returns a role's permissions, so permissions are not exported.
+Roles are read from the same API the OneTrust web app uses on Settings > Roles:
+  GET /api/access/v2/roles/list  and  GET /api/access/v2/roles/{roleId}
+That API is not in OneTrust's public docs, so it may refuse an API token or change without notice.
+If it refuses, the script falls back to the documented SCIM Groups API, which gives
+role and organization names only (no permissions).
 
 Standard library only: no pip install needed (Python 3.8+).
 """
@@ -16,14 +19,14 @@ import urllib.request
 # ============================ CONFIGURATION: fill these in ============================
 ONETRUST_DOMAIN = "yourtenant.my.onetrust.com"      # host you log in to, without https://
 # Fill in EITHER the API key OR the client ID + secret (the API key wins if both are set).
-# Whichever you use needs the SCIM scope.
 ONETRUST_API_KEY = "paste-your-api-key-here"
 ONETRUST_CLIENT_ID = "paste-your-client-id-here"
 ONETRUST_CLIENT_SECRET = "paste-your-client-secret-here"
 # =======================================================================================
 
-REQUEST_DELAY = 0.5   # seconds between page requests
-PAGE_SIZE = 25        # groups per page; 25 is the SCIM API maximum
+REQUEST_DELAY = 0.5   # seconds between requests
+ROLES_PAGE_SIZE = 50  # roles per page when listing (what the web app uses)
+SCIM_PAGE_SIZE = 25   # groups per page in the SCIM fallback; 25 is the SCIM API maximum
 TIMEOUT = 30          # seconds per HTTP request
 MAX_RETRIES = 5       # retries on 429 / 5xx / connection errors
 BACKOFF_FACTOR = 1    # waits 1s, 2s, 4s, 8s... between retries (Retry-After header wins when sent)
@@ -37,8 +40,10 @@ API_KEY = ONETRUST_API_KEY
 CLIENT_ID = ONETRUST_CLIENT_ID
 CLIENT_SECRET = ONETRUST_CLIENT_SECRET
 TOKEN_URL = f"https://{DOMAIN}/api/access/v1/oauth/token"
+ROLES_LIST_URL = f"https://{DOMAIN}/api/access/v2/roles/list"
+ROLE_URL = f"https://{DOMAIN}/api/access/v2/roles"          # + /{roleId}
 GROUPS_URL = f"https://{DOMAIN}/api/scim/v2/Groups"
-HEADERS = {"Accept": "application/json"}  # Authorization is added once the token is fetched
+HEADERS = {"Accept": "application/json"}  # Authorization is added once the token is known
 
 
 def is_filled(value):
@@ -99,11 +104,63 @@ def get_json(url, params=None):
         time.sleep(delay)
 
 
+def write_output(data):
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+    return os.path.abspath(OUTPUT_FILE)
+
+
+# ------------------------------ roles API (web app's API) ------------------------------
+
+def fetch_role_list():
+    """Return every role summary, following page/size pagination. None if any page fails."""
+    roles, page = [], 0
+    while True:
+        # same query the Settings > Roles page sends, with the filters left empty
+        params = {"roleName": "", "roleTypeId": "", "solutionNames": "", "page": page, "size": ROLES_PAGE_SIZE}
+        data = get_json(ROLES_LIST_URL, params)
+        if data is None:
+            return None
+        if isinstance(data, list):  # bare array instead of a page object
+            return data
+        if "content" not in data:
+            print(f"  [ERROR] {ROLES_LIST_URL}: unexpected response, keys: {list(data)[:10]}")
+            return None
+        roles.extend(data["content"])
+        if not data["content"] or page + 1 >= data.get("totalPages", 1):
+            return roles
+        page += 1
+        time.sleep(REQUEST_DELAY)
+
+
+def fetch_role_details(roles):
+    """Fetch each role's full record. Returns (details, names of roles that failed)."""
+    detailed, failed = [], []
+    for i, role in enumerate(roles, 1):
+        role_id = role.get("id") or role.get("roleId")
+        name = role.get("name") or role.get("roleName") or "<unnamed>"
+        if not role_id:
+            print(f"[{i}/{len(roles)}] SKIP {name}: no id in list response")
+            failed.append(name)
+            continue
+        print(f"[{i}/{len(roles)}] Fetching {name} ({role_id}) ...")
+        detail = get_json(f"{ROLE_URL}/{role_id}")
+        if detail is None:
+            failed.append(name)
+        else:
+            detailed.append(detail)
+        if i < len(roles):
+            time.sleep(REQUEST_DELAY)
+    return detailed, failed
+
+
+# ------------------------------ SCIM fallback (role names only) ------------------------------
+
 def fetch_groups():
     """Return every SCIM group, following startIndex/count pagination. None if any page fails."""
     groups, start = [], 1
     while True:
-        data = get_json(GROUPS_URL, {"startIndex": start, "count": PAGE_SIZE})
+        data = get_json(GROUPS_URL, {"startIndex": start, "count": SCIM_PAGE_SIZE})
         if data is None:
             return None
         page = data.get("Resources", [])
@@ -153,19 +210,31 @@ def main():
     # shortcut: token is fetched once; if exports ever outlast its lifetime, refresh on 401
     HEADERS["Authorization"] = f"Bearer {token}"
 
-    print(f"Fetching roles from {GROUPS_URL} ...")
+    print(f"Fetching roles from {ROLES_LIST_URL} ...")
+    roles = fetch_role_list()
+    if roles:
+        print(f"Found {len(roles)} role(s).\n")
+        detailed, failed = fetch_role_details(roles)
+        if not detailed:
+            sys.exit("Every role detail request failed; see the errors above.")
+        path = write_output(detailed)
+        print(f"\nSaved {len(detailed)}/{len(roles)} role(s) with their details to {path}")
+        if failed:
+            print(f"Failed ({len(failed)}): {', '.join(failed)}")
+        return
+
+    print("\n[FALLBACK] The roles API didn't work with this token. "
+          f"Listing role names from {GROUPS_URL} instead (no permissions) ...")
     groups = fetch_groups()
     if groups is None:
-        sys.exit(f"Could not list roles. If the error above is HTTP 401 or 403, check the "
+        sys.exit(f"Could not list roles. If the errors above are HTTP 401 or 403, check the "
                  f"{'API key' if use_api_key else 'client ID and secret'} and that it has the SCIM scope "
                  f"(Global Settings > Access Management > Client Credentials).")
     if not groups:
         sys.exit("No roles returned.")
-
     roles = build_roles(groups)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(roles, f, indent=4, ensure_ascii=False)
-    print(f"\nSaved {len(roles)} role(s) from {len(groups)} role/organization pair(s) to {os.path.abspath(OUTPUT_FILE)}")
+    path = write_output(roles)
+    print(f"\nSaved {len(roles)} role name(s) from {len(groups)} role/organization pair(s) to {path}")
 
 
 if __name__ == "__main__":
