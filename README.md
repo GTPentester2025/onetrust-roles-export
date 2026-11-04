@@ -106,7 +106,8 @@ If the API key or the Client ID + Secret gets HTTP 401 or 403, the script stops 
 
 For each role it calls `GET /api/access/v2/roles/{roleId}/accessible-permissions`, the request the web app sends when you open a role's simple view, and saves `role_permissions.json`: each role from `roles.json` plus a `permissions` field holding the full response.
 
-- **Token expires partway:** the script saves what it has and stops. Copy a fresh token and cookie and run it again, and roles already saved are skipped. Delete `role_permissions.json` to start over.
+- **Token time left:** with a browser token, the script prints how long the token is still valid when it starts.
+- **Token expires partway:** the script saves what it has, then asks for a fresh token and cookie. In Burp, copy both from a new request and paste each at its prompt. Nothing shows while you paste, which is expected. It retries the same role and carries on. Press Enter on an empty prompt to stop instead. If it isn't run from a terminal, it stops. Run it again and the roles already saved are skipped. Delete `role_permissions.json` to start over.
 - **`[NOTE] Every response was empty`:** the permissions come from a different request. Open a role's permissions in OneTrust, find that request in Burp, and set `PERMISSIONS_URL` to its URL, using `{domain}` and `{role_id}` as placeholders.
 
 Your browser token and cookie give the same access as your login. Don't share them, paste them into chats, or commit them. `roles.json` and `role_permissions.json` are in `.gitignore`.

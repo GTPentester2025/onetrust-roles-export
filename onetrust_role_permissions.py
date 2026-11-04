@@ -13,11 +13,14 @@ Authenticate with ONE of: the browser token from Burp, an API key, or a client I
 isn't in OneTrust's public docs and has refused API keys and client credentials with HTTP 403, so the
 browser token is the one known to work. OneTrust ties that token to the __Secure-fgpt cookie and
 expires it after 5 minutes, so copy the Authorization token AND the Cookie from the same fresh request
-in Burp, then run the script right away. If the token expires partway, the script saves what it has
-and stops; run it again with a fresh token and cookie, and roles already saved are skipped.
+in Burp, then run the script right away. When the token expires partway, the script saves what it has
+and asks you to paste a fresh token and cookie, then carries on from the same role. (If it can't ask,
+for example when not run from a terminal, it stops instead; run it again and saved roles are skipped.)
 
 Standard library only: no pip install needed (Python 3.8+).
 """
+import base64
+import getpass
 import json
 import os
 import re
@@ -104,6 +107,47 @@ def choose_login():
             sys.exit("Could not get an access token. Check the domain, client ID and client secret.")
         return "client ID + secret", token
     return "cookie", None
+
+
+def token_seconds_left(token):
+    """Seconds until a JWT's "exp" claim (negative if expired), or None if the token isn't a readable JWT."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return int(json.loads(base64.urlsafe_b64decode(payload))["exp"] - time.time())
+    except (IndexError, ValueError, KeyError, TypeError):
+        return None
+
+
+def describe_expiry(token):
+    left = token_seconds_left(token)
+    if left is None:
+        return ""
+    if left <= 0:
+        return f"[WARNING] This token expired {-left}s ago: copy a fresh one from Burp."
+    return f"Token valid for {left // 60}m {left % 60:02d}s."
+
+
+def can_prompt():
+    return sys.stdin.isatty()
+
+
+def ask_for_fresh_login(status):
+    """After the browser token is rejected, ask for a fresh token + cookie instead of stopping.
+    Returns the new bearer token, or None if the user pressed Enter or the script can't ask."""
+    global COOKIE
+    if not can_prompt():
+        return None
+    print(f"\nLogin rejected (HTTP {status}): the browser token has probably expired. Progress is saved.")
+    print("Copy the token and the Cookie from a fresh request in Burp and paste them here "
+          "(input is hidden). Press Enter on an empty line to stop.")
+    token = strip_prefix(getpass.getpass("  Authorization token: "), "Bearer ")
+    if not token:
+        return None
+    cookie = strip_prefix(getpass.getpass("  Cookie: "), "Cookie:")
+    COOKIE = cookie or COOKIE
+    print(f"  {describe_expiry(token) or 'Got it.'} Continuing ...\n")
+    return token
 
 
 def build_headers(bearer):
@@ -211,19 +255,28 @@ def main():
     headers = build_headers(bearer)
     todo = [r for r in roles if r.get("id") not in results]
     print(f"Logging in with: {login}")
+    if login == "browser token" and describe_expiry(bearer):
+        print(describe_expiry(bearer))
     print(f"{len(roles)} role(s) in {ROLES_FILE}; {len(roles) - len(todo)} already saved, {len(todo)} to fetch.\n")
 
     failed = []
-    for i, role in enumerate(todo, 1):
+    i = 0
+    while i < len(todo):
+        role = todo[i]
         role_id, name = role.get("id"), role.get("name", "<unnamed>")
         if not role_id:
-            print(f"[{i}/{len(todo)}] SKIP {name}: no id")
+            print(f"[{i + 1}/{len(todo)}] SKIP {name}: no id")
             failed.append(name)
+            i += 1
             continue
-        print(f"[{i}/{len(todo)}] {name} ...")
+        print(f"[{i + 1}/{len(todo)}] {name} ...")
         status, permissions = get_json(PERMISSIONS_URL.format(domain=DOMAIN, role_id=role_id), headers)
         if status in AUTH_STATUSES:
             save(out_path, roles, results)
+            fresh = ask_for_fresh_login(status) if login == "browser token" else None
+            if fresh:
+                headers = build_headers(fresh)
+                continue  # retry this role with the fresh token
             hint = ("browser tokens expire after 5 minutes and only work with their cookie: copy a fresh token AND "
                     "the Cookie from the same Burp request into ONETRUST_TOKEN and ONETRUST_COOKIE, and check "
                     "ONETRUST_DOMAIN matches the request's Host"
@@ -237,6 +290,7 @@ def main():
         else:
             results[role_id] = {**role, "permissions": permissions}
             save(out_path, roles, results)
+        i += 1
         if i < len(todo):
             time.sleep(REQUEST_DELAY)
 
