@@ -78,9 +78,31 @@ The result is written to `onetrust_roles.json` in the folder you run the command
 
 This file is in `.gitignore`, because it contains your tenant's data.
 
+## Role permissions from a saved roles list (`onetrust_role_permissions.py`)
+
+A second, **read-only** script (it sends only GET requests) for when the roles API refuses API tokens (HTTP 403). It uses your browser's login token instead.
+
+1. In OneTrust, open **Settings → Roles**. In Burp (or the browser's dev tools), find the `GET /api/access/v2/roles/list?...` request and save its **response body** as `roles.json` next to the script. If the list has more roles than one page holds, resend the request with a larger `size` (for example `size=500`) first. The script warns you when the file holds only one page.
+2. From any `/api/` request in Burp, copy the value after `Authorization: Bearer `.
+3. Fill in the CONFIGURATION block:
+   ```python
+   ONETRUST_DOMAIN = "uat-de.onetrust.com"
+   ONETRUST_TOKEN = "eyJ..."     # value after "Authorization: Bearer "
+   ONETRUST_COOKIE = ""          # only if the request has no Authorization header
+   EXTRA_HEADERS = {}            # only if requests fail without other headers Burp shows
+   ```
+4. Run `python onetrust_role_permissions.py` right away, because browser tokens expire.
+
+For each role it calls `GET /api/access/v2/roles/{roleId}`, the request the web app sends when you open a role, and saves `role_permissions.json`: each role from `roles.json` plus a `details` field holding the full response.
+
+- **Token expires partway:** the script saves what it has and stops. Paste a fresh token and run it again, and roles already saved are skipped. Delete `role_permissions.json` to start over.
+- **`[NOTE] None of the responses mention permissions`:** the permissions come from a different request. Open a role's permissions in OneTrust, find that request in Burp, and set `ROLE_URL` to its URL, using `{domain}` and `{role_id}` as placeholders.
+
+Your browser token gives the same access as your login. Don't share it or commit it. `roles.json` and `role_permissions.json` are in `.gitignore`.
+
 ## Settings
 
-These constants are at the top of the script:
+These constants are at the top of `onetrust_roles_export.py`:
 
 | Setting | Default | Meaning |
 |---|---|---|

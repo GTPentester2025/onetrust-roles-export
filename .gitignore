@@ -1,4 +1,6 @@
 # exported tenant data
 onetrust_roles.json
 onetrust_roles_schema.json
+roles.json
+role_permissions.json
 __pycache__/
