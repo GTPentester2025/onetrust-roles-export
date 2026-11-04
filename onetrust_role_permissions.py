@@ -1,18 +1,20 @@
-"""Fetch the details (including permissions) of every OneTrust role listed in roles.json.
+"""Fetch the permissions of every OneTrust role listed in roles.json.
 
 roles.json is the response of GET /api/access/v2/roles/list, saved from Burp next to this script.
-For each role, the script calls GET /api/access/v2/roles/{roleId}, the request the OneTrust web app
-sends when you open a role, and saves the responses to role_permissions.json.
+For each role, the script calls GET /api/access/v2/roles/{roleId}/accessible-permissions, the request
+the OneTrust web app sends when you open a role (Settings > Roles > role > simple view), and saves
+the responses to role_permissions.json.
 
 Read-only: every data request is a GET. It never creates, changes or deletes anything in OneTrust.
 The only non-GET request is the login POST to /api/access/v1/oauth/token, sent only when you use a
 client ID + secret; it just exchanges them for a token.
 
-Authenticate with ONE of: the browser token from Burp (the value after "Authorization: Bearer "),
-an API key, or a client ID + secret. This API isn't in OneTrust's public docs and has refused API keys
-and client credentials with HTTP 403, so the browser token is the one known to work.
-If the token expires partway, the script saves what it has and stops. Run it again with a fresh token;
-roles already saved are skipped.
+Authenticate with ONE of: the browser token from Burp, an API key, or a client ID + secret. This API
+isn't in OneTrust's public docs and has refused API keys and client credentials with HTTP 403, so the
+browser token is the one known to work. OneTrust ties that token to the __Secure-fgpt cookie and
+expires it after 5 minutes, so copy the Authorization token AND the Cookie from the same fresh request
+in Burp, then run the script right away. If the token expires partway, the script saves what it has
+and stops; run it again with a fresh token and cookie, and roles already saved are skipped.
 
 Standard library only: no pip install needed (Python 3.8+).
 """
@@ -26,19 +28,19 @@ import urllib.parse
 import urllib.request
 
 # ============================ CONFIGURATION: fill these in ============================
-ONETRUST_DOMAIN = "yourtenant.my.onetrust.com"   # host you log in to, without https://
+ONETRUST_DOMAIN = "yourtenant.my.onetrust.com"   # Host header of the Burp request, e.g. app-de.onetrust.com
 # Fill in ONE way to log in. If several are filled in, the first one in this list is used.
 ONETRUST_TOKEN = "paste-your-token-here"          # browser token: value after "Authorization: Bearer " in Burp
 ONETRUST_API_KEY = "paste-your-api-key-here"      # API key (Client Credentials > API Keys tab)
 ONETRUST_CLIENT_ID = "paste-your-client-id-here"  # client ID + secret (Client Credentials tab)
 ONETRUST_CLIENT_SECRET = "paste-your-client-secret-here"
-ONETRUST_COOKIE = ""      # optional: the Cookie header value, if Burp's request has no Authorization header
+ONETRUST_COOKIE = ""      # with the browser token: the Cookie header value from the SAME request (has __Secure-fgpt)
 EXTRA_HEADERS = {}        # optional: other headers copied from Burp's request, e.g. {"Header-Name": "value"}
 # =======================================================================================
 
 ROLES_FILE = "roles.json"               # roles list saved from Burp, next to this script
 OUTPUT_FILE = "role_permissions.json"   # written next to this script
-ROLE_URL = "https://{domain}/api/access/v2/roles/{role_id}"   # change if Burp shows permissions at another URL
+PERMISSIONS_URL = "https://{domain}/api/access/v2/roles/{role_id}/accessible-permissions"
 TOKEN_URL = "https://{domain}/api/access/v1/oauth/token"      # used only with a client ID + secret
 REQUEST_DELAY = 0.5   # seconds between role requests
 TIMEOUT = 30          # seconds per HTTP request
@@ -61,10 +63,10 @@ def is_filled(value):
     return bool(value) and not value.startswith("paste-")
 
 
-def strip_bearer(value):
-    """Accept a token pasted with or without its "Bearer " prefix."""
+def strip_prefix(value, prefix):
+    """Accept a value pasted with or without its header prefix, e.g. "Bearer " or "Cookie: "."""
     value = value.strip()
-    return value[7:].strip() if value.lower().startswith("bearer ") else value
+    return value[len(prefix):].strip() if value.lower().startswith(prefix.lower()) else value
 
 
 def get_token():
@@ -92,9 +94,9 @@ def get_token():
 def choose_login():
     """Return (login method, bearer token or None for cookie only) from the first credential filled in."""
     if is_filled(TOKEN):
-        return "browser token", strip_bearer(TOKEN)
+        return "browser token", strip_prefix(TOKEN, "Bearer ")
     if is_filled(API_KEY):
-        return "API key", strip_bearer(API_KEY)  # a OneTrust API key is itself the bearer token
+        return "API key", strip_prefix(API_KEY, "Bearer ")  # a OneTrust API key is itself the bearer token
     if is_filled(CLIENT_ID) and is_filled(CLIENT_SECRET):
         print("Requesting access token with the client ID + secret ...")
         token = get_token()
@@ -109,7 +111,7 @@ def build_headers(bearer):
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
     if COOKIE:
-        headers["Cookie"] = COOKIE.strip()
+        headers["Cookie"] = strip_prefix(COOKIE, "Cookie:")
     return headers
 
 
@@ -145,7 +147,8 @@ def load_previous(path):
         return {}
     try:
         with open(path, encoding="utf-8") as f:
-            return {r["id"]: r for r in json.load(f) if isinstance(r, dict) and r.get("id")}
+            # records without "permissions" come from an older version of this script: fetch them again
+            return {r["id"]: r for r in json.load(f) if isinstance(r, dict) and r.get("id") and "permissions" in r}
     except (ValueError, TypeError):
         print(f"[WARNING] {path} could not be read; starting over.\n")
         return {}
@@ -197,6 +200,9 @@ def main():
     if "yourtenant" in DOMAIN or not has_login:
         sys.exit("[CONFIG] Fill in ONETRUST_DOMAIN and one way to log in (ONETRUST_TOKEN, ONETRUST_API_KEY, "
                  "ONETRUST_CLIENT_ID + ONETRUST_CLIENT_SECRET, or ONETRUST_COOKIE) at the top of the script.")
+    if is_filled(TOKEN) and "__Secure-fgpt" not in COOKIE:
+        print("[WARNING] ONETRUST_TOKEN is set but ONETRUST_COOKIE has no __Secure-fgpt cookie. OneTrust rejects "
+              "the browser token without it: copy the Cookie header from the same Burp request.\n")
 
     roles = load_roles(os.path.join(HERE, ROLES_FILE))
     out_path = os.path.join(HERE, OUTPUT_FILE)
@@ -215,18 +221,21 @@ def main():
             failed.append(name)
             continue
         print(f"[{i}/{len(todo)}] {name} ...")
-        status, detail = get_json(ROLE_URL.format(domain=DOMAIN, role_id=role_id), headers)
+        status, permissions = get_json(PERMISSIONS_URL.format(domain=DOMAIN, role_id=role_id), headers)
         if status in AUTH_STATUSES:
             save(out_path, roles, results)
-            hint = ("it has expired: copy a fresh one from Burp into ONETRUST_TOKEN" if login == "browser token"
-                    else "this API often refuses API keys and client credentials: use the browser token from Burp "
-                         "(ONETRUST_TOKEN) instead")
-            sys.exit(f"\nLogin rejected (HTTP {status}) using the {login}; {hint}. Run again and the "
+            hint = ("browser tokens expire after 5 minutes and only work with their cookie: copy a fresh token AND "
+                    "the Cookie from the same Burp request into ONETRUST_TOKEN and ONETRUST_COOKIE, and check "
+                    "ONETRUST_DOMAIN matches the request's Host"
+                    if login == "browser token" else
+                    "this API often refuses API keys and client credentials: use the browser token and Cookie "
+                    "from Burp (ONETRUST_TOKEN + ONETRUST_COOKIE) instead")
+            sys.exit(f"\nLogin rejected (HTTP {status}) using the {login}. {hint}. Run again and the "
                      f"{len(results)} role(s) saved so far will be skipped.")
-        if detail is None:
+        if permissions is None:
             failed.append(name)
         else:
-            results[role_id] = {**role, "details": detail}
+            results[role_id] = {**role, "permissions": permissions}
             save(out_path, roles, results)
         if i < len(todo):
             time.sleep(REQUEST_DELAY)
@@ -235,9 +244,9 @@ def main():
     print(f"\nSaved {len(results)}/{len(roles)} role(s) to {out_path}")
     if failed:
         print(f"Failed ({len(failed)}): {', '.join(failed)}. Run again to retry them.")
-    if results and "permission" not in json.dumps([r["details"] for r in results.values()]).lower():
-        print("\n[NOTE] None of the responses mention permissions. Open a role's permissions in OneTrust, find the "
-              "request in Burp that returns them, and put its URL in ROLE_URL (with {domain} and {role_id}).")
+    if results and not any(r["permissions"] for r in results.values()):
+        print("\n[NOTE] Every response was empty. Open a role's permissions in OneTrust, find the request in Burp "
+              "that returns them, and put its URL in PERMISSIONS_URL (with {domain} and {role_id}).")
 
 
 if __name__ == "__main__":

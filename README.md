@@ -83,32 +83,33 @@ This file is in `.gitignore`, because it contains your tenant's data.
 A second, **read-only** script. Every data request is a GET. The only other request is the login POST to `/api/access/v1/oauth/token`, which is sent only when you use a Client ID + Secret and just gets a token.
 
 It accepts **one** of these logins. If several are filled in, the first in this list is used:
-- **Browser token:** the value after `Authorization: Bearer ` on any `/api/` request in Burp. This is the one known to work, because the roles API has refused API keys and client credentials with HTTP 403.
+- **Browser token + its cookie:** the value after `Authorization: Bearer ` and the whole `Cookie` header value, both from the **same** request in Burp. This is the one known to work, because the roles API has refused API keys and client credentials with HTTP 403. OneTrust ties the token to the `__Secure-fgpt` cookie and expires it after **5 minutes**, so copy both from a fresh request and run the script right away. The browser fetches new tokens all the time, which is why every request in Burp shows a different one.
 - **API key:** from the API Keys tab.
 - **Client ID + Client Secret:** from the Client Credentials tab.
-- **Cookie:** only if Burp's requests have no `Authorization` header.
+- **Cookie only:** if Burp's requests have no `Authorization` header.
 
 1. In OneTrust, open **Settings → Roles**. In Burp (or the browser's dev tools), find the `GET /api/access/v2/roles/list?...` request and save its **response body** as `roles.json` next to the script. If the list has more roles than one page holds, resend the request with a larger `size` (for example `size=500`) first. The script warns you when the file holds only one page.
 2. Fill in the CONFIGURATION block. Leave the logins you don't use as their `paste-...` placeholders:
    ```python
-   ONETRUST_DOMAIN = "uat-de.onetrust.com"
+   ONETRUST_DOMAIN = "app-de.onetrust.com"           # the Host header of the Burp request
    ONETRUST_TOKEN = "paste-your-token-here"          # browser token: value after "Authorization: Bearer " in Burp
    ONETRUST_API_KEY = "paste-your-api-key-here"      # API key (Client Credentials > API Keys tab)
    ONETRUST_CLIENT_ID = "paste-your-client-id-here"  # client ID + secret (Client Credentials tab)
    ONETRUST_CLIENT_SECRET = "paste-your-client-secret-here"
-   ONETRUST_COOKIE = ""      # only if the request has no Authorization header
+   ONETRUST_COOKIE = ""      # with the browser token: the Cookie header value from the SAME request
    EXTRA_HEADERS = {}        # only if requests fail without other headers Burp shows
    ```
-3. Run `python onetrust_role_permissions.py`. With a browser token, run it right away, because browser tokens expire.
+   `ONETRUST_DOMAIN` must be the host the token came from. A token from `app-de` won't work on `uat-de`.
+3. Run `python onetrust_role_permissions.py` within 5 minutes of copying a browser token.
 
 If the API key or the Client ID + Secret gets HTTP 401 or 403, the script stops after the first request and tells you to use the browser token.
 
-For each role it calls `GET /api/access/v2/roles/{roleId}`, the request the web app sends when you open a role, and saves `role_permissions.json`: each role from `roles.json` plus a `details` field holding the full response.
+For each role it calls `GET /api/access/v2/roles/{roleId}/accessible-permissions`, the request the web app sends when you open a role's simple view, and saves `role_permissions.json`: each role from `roles.json` plus a `permissions` field holding the full response.
 
-- **Token expires partway:** the script saves what it has and stops. Paste a fresh token and run it again, and roles already saved are skipped. Delete `role_permissions.json` to start over.
-- **`[NOTE] None of the responses mention permissions`:** the permissions come from a different request. Open a role's permissions in OneTrust, find that request in Burp, and set `ROLE_URL` to its URL, using `{domain}` and `{role_id}` as placeholders.
+- **Token expires partway:** the script saves what it has and stops. Copy a fresh token and cookie and run it again, and roles already saved are skipped. Delete `role_permissions.json` to start over.
+- **`[NOTE] Every response was empty`:** the permissions come from a different request. Open a role's permissions in OneTrust, find that request in Burp, and set `PERMISSIONS_URL` to its URL, using `{domain}` and `{role_id}` as placeholders.
 
-Your browser token gives the same access as your login. Don't share it or commit it. `roles.json` and `role_permissions.json` are in `.gitignore`.
+Your browser token and cookie give the same access as your login. Don't share them, paste them into chats, or commit them. `roles.json` and `role_permissions.json` are in `.gitignore`.
 
 ## Settings
 
