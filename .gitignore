@@ -6,6 +6,8 @@ roles.json
 role_permissions.json
 # per-role files written by split_roles.py
 roles/
+# captured API calls/responses written by onetrust_discover.py
+discovery/
 # local browser login session (keeps you logged in between runs)
 .onetrust_profile/
 __pycache__/

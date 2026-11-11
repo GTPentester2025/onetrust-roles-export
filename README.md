@@ -156,6 +156,25 @@ The pure logic (token parsing, roles-list handling, record merging) has a standa
 python test_onetrust_browser_export.py
 ```
 
+## Discover a module's real API endpoints (`onetrust_discover.py`)
+
+For exporting things the roles scripts don't cover — such as **PIA/DPIA assessment templates** (the Templates, Archive and Notifications sub-tabs) — this finds the real endpoints the way this repo always has: by watching the web app, not by guessing URLs.
+
+It is **fully passive and safe to run on production**: it launches the browser (reusing your saved login) and only *listens* to the API calls the OneTrust web app makes as you click around. It sends **no requests of its own**, so it cannot create, change or delete anything.
+
+```bash
+python onetrust_discover.py        # set ONETRUST_DOMAIN at the top first
+```
+
+Open the module you want (e.g. PIA → assessment templates), click through its tabs, open a record or two, then **close the browser window**. It writes to `discovery/` (git-ignored):
+
+- `discovery/endpoints.json` — the de-duplicated map of every endpoint seen (method, path, params, status)
+- `discovery/responses/*.json` — the JSON bodies the app loaded, with a `_manifest.json`
+
+**Masking:** the live `Authorization` and `Cookie` headers are never recorded, and everything written or printed is run through a masker that scrubs bearer tokens, cookies and secret-shaped values. Captured response bodies keep your real data but have any credential-shaped substrings masked.
+
+Once you have `discovery/endpoints.json`, it tells you exactly which endpoints to build a read-only exporter against.
+
 ## Split the export into one file per role (`split_roles.py`)
 
 After an export, this splits `onetrust_roles_full.json` into a subfolder with one JSON file per role. Standard library only, and it never touches the network — it just reads one local file and writes local files.
