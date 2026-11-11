@@ -9,6 +9,14 @@ import tempfile
 import onetrust_assessment_export as mod
 
 
+def test_describe_shape():
+    assert mod.describe_shape([1, 2, 3]) == "list[3]"
+    assert mod.describe_shape({"content": [1, 2], "page": {"a": 1}, "total": 2}) == \
+        "dict{content: list[2], page: dict{1}, total: int}"
+    assert mod.describe_shape("x") == "str"
+    assert mod.describe_shape(None) == "NoneType"
+
+
 def test_extract_templates_bare_array():
     assert mod.extract_templates([{"id": "1"}]) == [{"id": "1"}]
 

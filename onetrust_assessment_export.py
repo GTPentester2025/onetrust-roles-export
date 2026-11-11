@@ -39,6 +39,7 @@ LIST_QUERIES = ["type=PIA"]
 OUTPUT_FILE = "assessment_templates_full.json"
 PER_TEMPLATE_DIR = "assessment_templates"
 SETTINGS_FILE = "assessment_templates_settings.json"
+RAW_LIST_FILE = "assessment_templates_list_raw.json"   # diagnostic: the raw list response(s), masked
 NOTIF_PAGE_SIZE = 200
 REQUEST_DELAY = 0.3
 
@@ -47,6 +48,23 @@ DOMAIN = ONETRUST_DOMAIN.replace("https://", "").replace("http://", "").strip("/
 
 
 # ------------------------------ pure helpers (no browser; unit-tested) ------------------------------
+
+def describe_shape(data):
+    """A short, safe description of a JSON value's shape, for diagnosing an unexpected response."""
+    if isinstance(data, list):
+        return f"list[{len(data)}]"
+    if isinstance(data, dict):
+        parts = []
+        for k, v in data.items():
+            if isinstance(v, list):
+                parts.append(f"{k}: list[{len(v)}]")
+            elif isinstance(v, dict):
+                parts.append(f"{k}: dict{{{len(v)}}}")
+            else:
+                parts.append(f"{k}: {type(v).__name__}")
+        return "dict{" + ", ".join(parts) + "}"
+    return type(data).__name__
+
 
 def extract_templates(data):
     """Pull the list of template records out of the list response, tolerating several shapes."""
@@ -134,18 +152,26 @@ def write_per_template(out_dir, records):
 
 def list_templates(sess):
     """Fetch every template summary across LIST_QUERIES, de-duplicated by id, in first-seen order."""
-    templates, seen = [], set()
+    templates, seen, raw = [], set(), {}
     for query in LIST_QUERIES:
-        _, data = sess.api_get(f"{sess.base}/api/template/v1/templates/details?{query}")
+        url = f"{sess.base}/api/template/v1/templates/details?{query}"
+        status, data = sess.api_get(url)
+        raw[query] = data
+        print(f"  [DIAG] templates/details?{query} -> status={status}, shape={describe_shape(data)}")
         items = extract_templates(data)
         if items is None:
-            print(f"  [WARNING] list ({query}) returned an unexpected shape; skipping it.")
+            print(f"  [WARNING] list ({query}) shape not recognized; saved raw to {RAW_LIST_FILE} for inspection.")
             continue
         for item in items:
             tid = template_id(item)
             if tid and tid not in seen:
                 seen.add(tid)
                 templates.append(item)
+    try:   # keep the raw list response(s) so an empty/odd result can be diagnosed; masked, git-ignored
+        with open(os.path.join(HERE, RAW_LIST_FILE), "w", encoding="utf-8") as f:
+            f.write(obe.redact(json.dumps(raw, indent=2, ensure_ascii=False)))
+    except OSError:
+        pass
     return templates
 
 
