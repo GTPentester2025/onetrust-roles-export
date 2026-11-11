@@ -156,6 +156,18 @@ The pure logic (token parsing, roles-list handling, record merging) has a standa
 python test_onetrust_browser_export.py
 ```
 
+## Split the export into one file per role (`split_roles.py`)
+
+After an export, this splits `onetrust_roles_full.json` into a subfolder with one JSON file per role. Standard library only, and it never touches the network — it just reads one local file and writes local files.
+
+```bash
+python split_roles.py                      # roles/  from onetrust_roles_full.json
+python split_roles.py INPUT.json           # custom input, into roles/
+python split_roles.py INPUT.json OUT_DIR   # custom input and output folder
+```
+
+Each file is named after the role's name (illegal filename characters replaced, Windows reserved names escaped), with the role's id appended only when two roles share a name or a name is empty. Each file holds that role's full record unchanged. The `roles/` folder is in `.gitignore` because it contains your tenant's data.
+
 ## Settings
 
 These constants are at the top of `onetrust_roles_export.py`:
