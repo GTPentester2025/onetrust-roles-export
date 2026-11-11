@@ -175,6 +175,30 @@ Open the module you want (e.g. PIA → assessment templates), click through its 
 
 Once you have `discovery/endpoints.json`, it tells you exactly which endpoints to build a read-only exporter against.
 
+## Export PIA/DPIA assessment templates (`onetrust_assessment_export.py`)
+
+Exports every PIA/DPIA assessment template with its full definition, questionnaire content, actions, translations and notifications. **Read-only** (every request is a GET) and browser-driven: it reuses the logged-in session from `onetrust_browser_export.py` (same local `.onetrust_profile`, same token capture and auto-refresh), so no token pasting. The endpoints were found with `onetrust_discover.py`, not guessed:
+
+```
+GET /api/template/v1/settings
+GET /api/template/v1/templates/details?type=PIA                         (the Templates/Archive list; PIA covers DPIA)
+  then per template {id}:
+GET /api/template/v1/templates/{id}/details                             (full definition)
+GET /api/template/v1/templates/rootversion/{rootVersionId}?version={n}  (questionnaire content)
+GET /api/template/v1/templates/{id}/actions                             (logic/actions)
+GET /api/template/v1/templates/{id}/translations                        (translations)
+GET /api/template/v1/custom-notifications/templates/{id}?...            (Notifications tab)
+```
+
+```bash
+python onetrust_assessment_export.py        # set ONETRUST_DOMAIN at the top first
+```
+
+Writes `assessment_templates_full.json` (one record per template, saved after each so a rerun resumes), splits it into one file per template under `assessment_templates/`, and saves module settings to `assessment_templates_settings.json`. All git-ignored.
+
+- **Archived templates:** the Templates and Archive tabs call the same list endpoint, so archived rows should come back in the list. If they don't appear in the output, add an archive filter to `LIST_QUERIES` at the top (templates are de-duplicated by id across queries).
+- **Questionnaire content:** needs each template's `rootVersionId` and `version`, read from the list/details response. If a template reports no content, the script says so — send one `/details` response and the field names can be mapped.
+
 ## Split the export into one file per role (`split_roles.py`)
 
 After an export, this splits `onetrust_roles_full.json` into a subfolder with one JSON file per role. Standard library only, and it never touches the network — it just reads one local file and writes local files.

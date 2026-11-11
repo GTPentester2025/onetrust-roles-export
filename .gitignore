@@ -8,6 +8,10 @@ role_permissions.json
 roles/
 # captured API calls/responses written by onetrust_discover.py
 discovery/
+# assessment-template export written by onetrust_assessment_export.py
+assessment_templates_full.json
+assessment_templates_settings.json
+assessment_templates/
 # local browser login session (keeps you logged in between runs)
 .onetrust_profile/
 __pycache__/
