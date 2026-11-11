@@ -1,6 +1,9 @@
 # exported tenant data
 onetrust_roles.json
 onetrust_roles_schema.json
+onetrust_roles_full.json
 roles.json
 role_permissions.json
+# local browser login session (keeps you logged in between runs)
+.onetrust_profile/
 __pycache__/

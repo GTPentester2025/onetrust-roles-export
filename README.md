@@ -112,6 +112,50 @@ For each role it calls `GET /api/access/v2/roles/{roleId}/accessible-permissions
 
 Your browser token and cookie give the same access as your login. Don't share them, paste them into chats, or commit them. `roles.json` and `role_permissions.json` are in `.gitignore`.
 
+## Browser-driven export, no token copying (`onetrust_browser_export.py`)
+
+A third script that removes the copy-a-token-every-5-minutes problem entirely. It opens a real browser, **you log in once** (SSO/MFA and all), and from then on it reads the live session's own bearer token straight from the web app's traffic and makes the API calls through the browser's own context — so the `__Secure-fgpt` cookie and every other session cookie are sent automatically. When a token is about to expire or a request is refused, it quietly reloads the app so OneTrust mints a fresh one and carries on from the same role. If your SSO session itself expires mid-run, it pauses and waits for you to log in again in the window, then resumes.
+
+This is the script to use if the API refuses API keys/client credentials (HTTP 403) and the manual browser-token flow is too fiddly across many roles.
+
+**Read-only:** every data request is a GET; it changes nothing in OneTrust.
+
+### Why SSO works here
+
+You log in inside the browser window exactly as you normally would — the IdP redirect, MFA, "remember this device" all happen in that window and you drive them. The script never needs your password and never automates the login; it only *reuses* the session afterwards. By default it drives your **installed Google Chrome** (so a managed/Conditional-Access browser policy is more likely to accept it) and falls back to bundled Chromium if Chrome isn't present.
+
+### Everything stays local
+
+At run time the **only** network destination is your own OneTrust tenant over HTTPS — no analytics, no telemetry, no third-party calls (Chromium is launched with background networking disabled). The one-time `playwright install chromium` download (only needed if Chrome isn't installed) happens at setup, carries none of your data, and never recurs. Output and the login profile are written next to the script and are git-ignored.
+
+### Setup
+
+One-time, needs Playwright (not stdlib-only like the other two scripts):
+```bash
+pip install playwright
+playwright install chromium     # only needed if Google Chrome isn't already installed
+```
+
+Then set your tenant host at the top of the script:
+```python
+ONETRUST_DOMAIN = "yourtenant.my.onetrust.com"   # e.g. app-de.onetrust.com (no https://)
+```
+No credentials go in the script — you log in in the browser.
+
+### Run
+
+```bash
+python onetrust_browser_export.py
+```
+A browser window opens on your tenant. Log in (the first run only, unless your IdP session expires; the login is remembered in a local `.onetrust_profile/` folder). The script then lists every role and, for each, fetches its full detail record and its accessible-permissions, merged into one record per role, saving to `onetrust_roles_full.json`. It saves after every role, so an interruption keeps progress and a rerun skips roles already saved.
+
+If a request keeps getting HTTP 403 even with the live session, the API may expect an extra header the web app sends. Find that header in dev tools / Burp and add it to `EXTRA_HEADERS` at the top of the script.
+
+The pure logic (token parsing, roles-list handling, record merging) has a standalone test that needs no browser:
+```bash
+python test_onetrust_browser_export.py
+```
+
 ## Settings
 
 These constants are at the top of `onetrust_roles_export.py`:
