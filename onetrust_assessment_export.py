@@ -27,6 +27,7 @@ import re
 import sys
 
 import onetrust_browser_export as obe   # reuse the browser session (login, token capture, api_get)
+import onetrust_crypto as otc           # passphrase encryption at rest
 from split_roles import role_stem       # reuse safe, unique per-record filenames
 
 # ============================ CONFIGURATION ============================
@@ -37,7 +38,9 @@ ONETRUST_DOMAIN = "app-de.onetrust.com"   # your tenant host (prefilled from dis
 LIST_QUERIES = ["type=PIA"]
 # ======================================================================
 
-OUTPUT_FILE = "assessment_templates_full.json"
+ENCRYPT_OUTPUT = True   # write the export encrypted at rest (passphrase); see onetrust_crypto.py
+ENC_FILE = "assessment_templates_export.enc"    # encrypted bundle (templates + settings); decrypt to read
+OUTPUT_FILE = "assessment_templates_full.json"  # plaintext output, only when ENCRYPT_OUTPUT = False
 PER_TEMPLATE_DIR = "assessment_templates"
 SETTINGS_FILE = "assessment_templates_settings.json"
 STRUCTURE_FILE = "assessment_templates_list_structure.json"   # diagnostic: shapes only, NO values/IDs/PII
@@ -181,6 +184,28 @@ def write_per_template(out_dir, records):
     return len(records)
 
 
+def load_results(passphrase):
+    """Return ({template id: record}, settings) from a previous run. Decrypts when a passphrase is given."""
+    if passphrase:
+        enc_path = os.path.join(HERE, ENC_FILE)
+        if os.path.exists(enc_path):
+            bundle = otc.decrypt_file_to_json(enc_path, passphrase)   # raises ValueError on wrong passphrase
+            results = {r["id"]: r for r in bundle.get("templates", []) if isinstance(r, dict) and r.get("id")}
+            return results, bundle.get("settings")
+        return {}, None
+    return load_previous(os.path.join(HERE, OUTPUT_FILE)), None
+
+
+def save_results(order, results, settings, passphrase):
+    """Persist the resume artifact: one encrypted bundle, or the plaintext combined file."""
+    ordered = [results[tid] for tid in order if tid in results]
+    if passphrase:
+        otc.encrypt_json_to_file(os.path.join(HERE, ENC_FILE),
+                                 {"templates": ordered, "settings": settings}, passphrase)
+    else:
+        save_combined(os.path.join(HERE, OUTPUT_FILE), order, results)
+
+
 # ------------------------------ export flow (uses the reused browser session) ------------------------------
 
 def list_templates(sess):
@@ -246,14 +271,12 @@ def fetch_template(sess, summary):
     }
 
 
-def run_export(sess):
-    out_path = os.path.join(HERE, OUTPUT_FILE)
-    results = load_previous(out_path)
+def run_export(sess, passphrase):
+    results, prev_settings = load_results(passphrase)
 
     _, settings = sess.api_get(f"{sess.base}/api/template/v1/settings")
-    if settings is not None:
-        with open(os.path.join(HERE, SETTINGS_FILE), "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=4, ensure_ascii=False)
+    if settings is None:
+        settings = prev_settings
 
     print("Listing PIA/DPIA templates ...")
     templates = list_templates(sess)
@@ -275,20 +298,25 @@ def run_export(sess):
         print(f"[{i}/{len(todo)}] {name} ...")
         try:
             results[tid] = fetch_template(sess, summary)
-            save_combined(out_path, order, results)
+            save_results(order, results, settings, passphrase)
         except obe.PlaywrightError as e:
             print(f"   [ERROR] {obe.redact(e)}")
             failed.append(name)
         if i < len(todo):
             sess._sleep(REQUEST_DELAY)
 
-    save_combined(out_path, order, results)
+    save_results(order, results, settings, passphrase)
     ordered = [results[tid] for tid in order if tid in results]
-    written = write_per_template(os.path.join(HERE, PER_TEMPLATE_DIR), ordered)
-    print(f"\nSaved {len(results)}/{len(templates)} template(s) to {out_path}")
-    print(f"Split into {written} per-template file(s) under {os.path.join(HERE, PER_TEMPLATE_DIR)}")
-    if settings is not None:
-        print(f"Module settings saved to {os.path.join(HERE, SETTINGS_FILE)}")
+    if passphrase:
+        print(f"\nSaved {len(results)}/{len(templates)} template(s), encrypted, to {os.path.join(HERE, ENC_FILE)}")
+        print("Decrypt it with: python onetrust_decrypt.py")
+    else:
+        written = write_per_template(os.path.join(HERE, PER_TEMPLATE_DIR), ordered)
+        if settings is not None:
+            with open(os.path.join(HERE, SETTINGS_FILE), "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=4, ensure_ascii=False)
+        print(f"\nSaved {len(results)}/{len(templates)} template(s) to {os.path.join(HERE, OUTPUT_FILE)}")
+        print(f"Split into {written} per-template file(s) under {os.path.join(HERE, PER_TEMPLATE_DIR)}")
     if failed:
         print(f"Failed ({len(failed)}): {', '.join(failed)}. Run again to retry them.")
     if any(r.get("content") is None for r in results.values()):
@@ -299,6 +327,20 @@ def run_export(sess):
 def main():
     if "yourtenant" in DOMAIN or not DOMAIN:
         sys.exit("[CONFIG] Set ONETRUST_DOMAIN at the top of the script to your tenant host, e.g. app-de.onetrust.com")
+
+    passphrase = None
+    if ENCRYPT_OUTPUT:
+        if not otc.available():
+            sys.exit("[SETUP] Encryption needs the cryptography package. Run:\n  pip install cryptography\n"
+                     "(or set ENCRYPT_OUTPUT = False at the top to write plaintext instead).")
+        enc_path = os.path.join(HERE, ENC_FILE)
+        passphrase = otc.prompt_passphrase(confirm=not os.path.exists(enc_path))
+        if os.path.exists(enc_path):   # fail fast if the passphrase doesn't match the existing file
+            try:
+                otc.decrypt_file_to_json(enc_path, passphrase)
+            except ValueError as e:
+                sys.exit(f"[ENCRYPT] {e}. Delete {ENC_FILE} to start over, or rerun with the right passphrase.")
+
     try:
         from playwright.sync_api import sync_playwright, Error
     except ImportError:
@@ -314,7 +356,7 @@ def main():
         try:
             if not sess.wait_for_login(initial=True):
                 sys.exit("Gave up waiting for a OneTrust session. Run again and log in when the window opens.")
-            run_export(sess)
+            run_export(sess, passphrase)
         finally:
             sess.close()
 

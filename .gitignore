@@ -9,6 +9,7 @@ roles/
 # captured API calls/responses written by onetrust_discover.py
 discovery/
 # assessment-template export written by onetrust_assessment_export.py
+assessment_templates_export.enc
 assessment_templates_full.json
 assessment_templates_settings.json
 assessment_templates/

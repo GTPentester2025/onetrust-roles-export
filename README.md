@@ -191,10 +191,21 @@ GET /api/template/v1/custom-notifications/templates/{id}?...            (Notific
 ```
 
 ```bash
-python onetrust_assessment_export.py        # set ONETRUST_DOMAIN at the top first
+pip install cryptography                     # for the encrypted output (one-time)
+python onetrust_assessment_export.py         # set ONETRUST_DOMAIN at the top first
 ```
 
-Writes `assessment_templates_full.json` (one record per template, saved after each so a rerun resumes), splits it into one file per template under `assessment_templates/`, and saves module settings to `assessment_templates_settings.json`. All git-ignored.
+**Encrypted at rest (default).** It asks for a passphrase and writes a single encrypted file, `assessment_templates_export.enc` — the template data is never on disk in plaintext. Encryption uses the `cryptography` library's Fernet (AES‑128‑CBC + HMAC) with a PBKDF2‑derived key; a random salt is stored per file. One record per template (plus module settings) is saved after each template, so a rerun resumes (it re‑reads the encrypted file with your passphrase). Keep the passphrase safe — without it the file can't be read.
+
+Read it back on demand:
+```bash
+python onetrust_decrypt.py                   # prompts for the passphrase
+```
+This writes the readable `assessment_templates_full.json`, one file per template under `assessment_templates/`, and `assessment_templates_settings.json`. Those decrypted files are plaintext and git‑ignored — delete them when done.
+
+To skip encryption and write plaintext directly, set `ENCRYPT_OUTPUT = False` at the top of the exporter.
+
+**Diagnostics are privacy‑safe:** if the list looks wrong, the script writes `assessment_templates_list_structure.json` — field names, types and counts only, with **no values, IDs, emails or GUIDs** — which is safe to share. Raw response bodies are never written unless you set `SAVE_RAW = True`.
 
 - **Archived templates:** the Templates and Archive tabs call the same list endpoint, so archived rows should come back in the list. If they don't appear in the output, add an archive filter to `LIST_QUERIES` at the top (templates are de-duplicated by id across queries).
 - **Questionnaire content:** needs each template's `rootVersionId` and `version`, read from the list/details response. If a template reports no content, the script says so — send one `/details` response and the field names can be mapped.
