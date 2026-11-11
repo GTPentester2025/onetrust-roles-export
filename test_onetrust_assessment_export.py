@@ -9,6 +9,40 @@ import tempfile
 import onetrust_assessment_export as mod
 
 
+def test_structure_strips_all_values():
+    data = {
+        "content": [
+            {"id": "48d79e7b-c67a-40b6-a51f-8e032600d00a", "name": "Secret Template Name",
+             "version": 44, "owner": {"email": "person@corp.com"}},
+        ],
+        "page": {"totalElements": 3},
+    }
+    shape = mod.structure(data)
+    text = json.dumps(shape)
+    # no real values survive
+    for leaked in ("48d79e7b", "Secret Template Name", "person@corp.com", "44", "3"):
+        assert leaked not in text
+    # but the field names and structure do
+    assert shape["content"][0] == "list[1]"
+    assert shape["content"][1] == {"id": "str", "name": "str", "version": "int", "owner": {"email": "str"}}
+
+
+def test_structure_masks_guid_and_email_keys():
+    data = {"a1b2c3d4-e5f6-7788-99aa-bbccddeeff00": {"x": 1}, "someone@x.com": 2}
+    shape = mod.structure(data)
+    assert "<guid>" in shape and "<email>" in shape
+    assert "a1b2c3d4" not in json.dumps(shape) and "someone@x.com" not in json.dumps(shape)
+
+
+def test_structure_collapses_guid_keyed_map():
+    data = {
+        "a1b2c3d4-e5f6-7788-99aa-bbccddeeff00": {"n": 1},
+        "11111111-2222-3333-4444-555555555555": {"n": 2},
+    }
+    shape = mod.structure(data)
+    assert list(shape.keys()) == ["<2 guid-keyed entries>"]
+
+
 def test_describe_shape():
     assert mod.describe_shape([1, 2, 3]) == "list[3]"
     assert mod.describe_shape({"content": [1, 2], "page": {"a": 1}, "total": 2}) == \

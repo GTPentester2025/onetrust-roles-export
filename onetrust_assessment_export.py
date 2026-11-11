@@ -23,6 +23,7 @@ Run: python onetrust_assessment_export.py
 """
 import json
 import os
+import re
 import sys
 
 import onetrust_browser_export as obe   # reuse the browser session (login, token capture, api_get)
@@ -39,7 +40,9 @@ LIST_QUERIES = ["type=PIA"]
 OUTPUT_FILE = "assessment_templates_full.json"
 PER_TEMPLATE_DIR = "assessment_templates"
 SETTINGS_FILE = "assessment_templates_settings.json"
-RAW_LIST_FILE = "assessment_templates_list_raw.json"   # diagnostic: the raw list response(s), masked
+STRUCTURE_FILE = "assessment_templates_list_structure.json"   # diagnostic: shapes only, NO values/IDs/PII
+RAW_LIST_FILE = "assessment_templates_list_raw.json"          # raw list response(s); only if SAVE_RAW
+SAVE_RAW = False   # keep False for privacy: don't write response bodies (IDs/PII) to disk at all
 NOTIF_PAGE_SIZE = 200
 REQUEST_DELAY = 0.3
 
@@ -63,6 +66,36 @@ def describe_shape(data):
             else:
                 parts.append(f"{k}: {type(v).__name__}")
         return "dict{" + ", ".join(parts) + "}"
+    return type(data).__name__
+
+
+_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _safe_key(key):
+    """Mask a dict key that is itself an id or email, so even field names leak nothing."""
+    key = str(key)
+    if _GUID_RE.match(key):
+        return "<guid>"
+    if "@" in key:
+        return "<email>"
+    return key
+
+
+def structure(data, _depth=0):
+    """Describe a JSON value's structure only - key names, types, list lengths - with NO values, ids or PII.
+    Safe to share for diagnosing a response. For a list, shows its length and the shape of its first item."""
+    if _depth > 8:
+        return "..."
+    if isinstance(data, dict):
+        keys = list(data.keys())
+        if len(keys) > 1 and all(_GUID_RE.match(str(k)) for k in keys):   # a map keyed by ids
+            return {f"<{len(keys)} guid-keyed entries>": structure(next(iter(data.values())), _depth + 1)}
+        return {_safe_key(k): structure(v, _depth + 1) for k, v in data.items()}
+    if isinstance(data, list):
+        return "list[0]" if not data else [f"list[{len(data)}]", structure(data[0], _depth + 1)]
+    if data is None:
+        return "null"
     return type(data).__name__
 
 
@@ -160,18 +193,27 @@ def list_templates(sess):
         print(f"  [DIAG] templates/details?{query} -> status={status}, shape={describe_shape(data)}")
         items = extract_templates(data)
         if items is None:
-            print(f"  [WARNING] list ({query}) shape not recognized; saved raw to {RAW_LIST_FILE} for inspection.")
+            print(f"  [WARNING] list ({query}) shape not recognized; see {STRUCTURE_FILE} (no values/IDs).")
             continue
         for item in items:
             tid = template_id(item)
             if tid and tid not in seen:
                 seen.add(tid)
                 templates.append(item)
-    try:   # keep the raw list response(s) so an empty/odd result can be diagnosed; masked, git-ignored
-        with open(os.path.join(HERE, RAW_LIST_FILE), "w", encoding="utf-8") as f:
-            f.write(obe.redact(json.dumps(raw, indent=2, ensure_ascii=False)))
+    # Privacy-safe diagnostic: structure only - field names, types and list lengths, NO values/IDs/PII.
+    # Safe to share. Raw response bodies are written ONLY if you explicitly set SAVE_RAW = True.
+    try:
+        shapes = {query: structure(data) for query, data in raw.items()}
+        with open(os.path.join(HERE, STRUCTURE_FILE), "w", encoding="utf-8") as f:
+            json.dump(shapes, f, indent=2, ensure_ascii=False)
     except OSError:
         pass
+    if SAVE_RAW:
+        try:
+            with open(os.path.join(HERE, RAW_LIST_FILE), "w", encoding="utf-8") as f:
+                f.write(obe.redact(json.dumps(raw, indent=2, ensure_ascii=False)))
+        except OSError:
+            pass
     return templates
 
 
@@ -218,6 +260,10 @@ def run_export(sess):
     order = [template_id(t) for t in templates if template_id(t)]
     todo = [t for t in templates if template_id(t) not in results]
     print(f"{len(templates)} template(s); {len(templates) - len(todo)} already saved, {len(todo)} to fetch.\n")
+    if not templates:
+        print(f"[NOTE] No templates came back. Open {STRUCTURE_FILE} (shapes only, no values/IDs) and paste me\n"
+              f"the one [DIAG] line above. If it shows list[0], the logged-in account can't see these PIA\n"
+              f"templates here - log in as the account that sees them in the browser window and rerun.\n")
 
     failed = []
     for i, summary in enumerate(todo, 1):
