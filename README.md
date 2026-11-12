@@ -210,6 +210,31 @@ To skip encryption and write plaintext directly, set `ENCRYPT_OUTPUT = False` at
 - **Archived templates:** the Templates and Archive tabs call the same list endpoint, so archived rows should come back in the list. If they don't appear in the output, add an archive filter to `LIST_QUERIES` at the top (templates are de-duplicated by id across queries).
 - **Questionnaire content:** needs each template's `rootVersionId` and `version`, read from the list/details response. If a template reports no content, the script says so — send one `/details` response and the field names can be mapped.
 
+## Sanitize data before sharing it (`onetrust_sanitize.py`)
+
+When you need to share a response or an export with someone (for debugging), run it through the sanitizer first. This is **not** the at-rest encryption above — it produces a masked copy with every sensitive **value** removed, while keeping enough structure to be useful. Local and read-only: it only transforms JSON/text you already have.
+
+```bash
+python onetrust_sanitize.py response.json                 # -> response.sanitized.json
+python onetrust_sanitize.py discovery/responses/          # sanitize every *.json in a folder
+python onetrust_sanitize.py assessment_templates_export.enc   # decrypts in memory, then sanitizes
+python onetrust_sanitize.py - < in.json > out.json        # stdin -> stdout
+python onetrust_sanitize.py --keep-text response.json     # keep free text; mask only ids/secrets
+```
+
+What it does to each value:
+
+| Value | Becomes |
+|---|---|
+| GUIDs/UUIDs | `<GUID_1>`, `<GUID_2>` … — **consistent**, so the same id is the same token everywhere (relationships stay visible) |
+| Emails | `<EMAIL_1>` … (same scheme) |
+| Bearer tokens / JWTs / API keys / secrets | `<secret>` |
+| Free text (names, descriptions, questions) | `<str:N>` — length only (default; use `--keep-text` to keep it) |
+| Dates/timestamps | `<date>` |
+| **Kept as-is** | JSON keys, booleans, numbers, `null`, enum tokens (`PIA`, `ACTIVE`, `IN_PROGRESS`), locales (`en-US`), short digit strings (versions/counts) |
+
+The token↔value mapping is held only in memory and is **never written out**, so a `*.sanitized.json` file can't be reversed. (ALL_CAPS tokens are kept because they're almost always status/type codes; if you want *zero* values, use the structure-only dump from the assessment exporter instead.) Sanitized files are git-ignored.
+
 ## Split the export into one file per role (`split_roles.py`)
 
 After an export, this splits `onetrust_roles_full.json` into a subfolder with one JSON file per role. Standard library only, and it never touches the network — it just reads one local file and writes local files.
