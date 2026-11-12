@@ -210,6 +210,29 @@ To skip encryption and write plaintext directly, set `ENCRYPT_OUTPUT = False` at
 - **Archived templates:** the Templates and Archive tabs call the same list endpoint, so archived rows should come back in the list. If they don't appear in the output, add an archive filter to `LIST_QUERIES` at the top (templates are de-duplicated by id across queries).
 - **Questionnaire content:** needs each template's `rootVersionId` and `version`, read from the list/details response. If a template reports no content, the script says so — send one `/details` response and the field names can be mapped.
 
+## Export template definitions via the official API (`onetrust_templates_api_export.py`)
+
+The **supported** way to export template definitions — no browser, no reverse-engineered endpoints. It uses OneTrust's published Assessment-Automation API through a read-only OAuth2 client (`onetrust_api.py`, standard library only). Every call is a GET:
+
+```
+GET /api/template/v1/published-template-metadata?template-types=PIA              (list; PIA covers DPIA)
+  then per template {rootVersionId}:
+GET /api/template/v2/templates/{rootVersionId}/export?templateVersion=latest     (full definition)
+```
+
+The export endpoint returns the full template metadata — questions, rules, skip/show logic — the same "Full definitions" as the UI's template export, in JSON.
+
+**Setup (one-time, in your tenant):** create a read-only client under **Global Settings → Access Management → Client Credentials** with scope **`ASSESSMENT_READ`**. (This is one reversible config addition — a read-only credential; it changes no data. Static API keys are end-of-support as of OneTrust 6.31, so OAuth2 is the supported method.) Then provide the credentials via the environment:
+
+```powershell
+$env:ONETRUST_CLIENT_ID = "..."       # PowerShell
+$env:ONETRUST_CLIENT_SECRET = "..."
+python onetrust_templates_api_export.py
+```
+If the variables aren't set, the script prompts for them (hidden). The secret is never logged. Output is **encrypted at rest** by default (same `onetrust_crypto` passphrase scheme), resumes on rerun, and can be decrypted with `python onetrust_decrypt.py assessment_templates_api_export.enc` or sanitized for sharing with `onetrust_sanitize.py`.
+
+**What this does NOT cover:** the official list returns **published** templates only, and the API has no per-template notifications endpoint — so the **Archive** and **Notifications** sub-tabs still come from the browser-driven `onetrust_assessment_export.py` above. Use that script for those two; use this one for robust, supported definition exports.
+
 ## Sanitize data before sharing it (`onetrust_sanitize.py`)
 
 When you need to share a response or an export with someone (for debugging), run it through the sanitizer first. This is **not** the at-rest encryption above — it produces a masked copy with every sensitive **value** removed, while keeping enough structure to be useful. Local and read-only: it only transforms JSON/text you already have.
